@@ -4,22 +4,37 @@ import os, sys
 from datetime import datetime
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
-
 # Добавляем корневую директорию проекта в sys.path
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
+import json
 import sqlite3
 import shutil
 from getpass import getuser
 
+def read_json(path_to_file):
+    '''
+    Считывает JSON файл из переданного пути
+    и возвращает полученную информацию
+    '''
+    with open(path_to_file,'r', encoding='utf-8') as Json_file:
+        templates = json.load(Json_file)
+    return (templates)
+
 class CADFolderDB():
     def __init__(self):
+        path_to_config = os.path.dirname(os.path.abspath(__file__))+'\\config.json'
+        config = read_json(path_to_config)
+        self.root_dir = '\\'+config['PROJECT ROOT'][0]
+        print(self.root_dir)
+
         self.db_path = project_root+'\\databases\\CADFolder.db'
         self.main_conn = sqlite3.connect(self.db_path)
         self.main_cursor = self.main_conn.cursor()
+        print('Установлено соединение с главной базой данных')
         
-    def update_project(self, root_dir):
+    def update_project(self):
         self.main_cursor.execute('''
             CREATE TABLE IF NOT EXISTS file_structure (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -42,7 +57,7 @@ class CADFolderDB():
         exists_paths = set(
             row[0] for row in self.main_cursor.fetchall()) 
 
-        for dirpath, dirnames, filenames in os.walk(root_dir):
+        for dirpath, dirnames, filenames in os.walk(self.root_dir):
             # Сохранение директорий
             for dirname in dirnames:
                 full_path = os.path.join(dirpath, dirname).replace("\\", "/")
@@ -92,14 +107,14 @@ class CADFolderDB():
 
 
     def sync_to_local(self):
-        #Задание начальных параметров. 
         user_name = getuser()
-        user_db = project_root+'\\databases\\CADFolder_{}.db'.format(user_name)
-        local_root = 'C:\\Users\\{}\\AppData\\NerpaSyncVault\\YKProject'.format(user_name)
+        user_db = project_root + '\\databases\\CADFolder_{}.db'.format(user_name)
+        local_root = os.path.join(os.getenv('USERPROFILE'), 'AppData', 'NerpaSyncVault', 'YKProject')
 
-        #создание или подключение пользовательской дб
+        # Создание или подключение пользовательской базы данных
         user_conn = sqlite3.connect(user_db)
         user_cursor = user_conn.cursor()
+        print('Установлено подключение к локальной базе данных')
         user_cursor.execute('''
             CREATE TABLE IF NOT EXISTS file_structure (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -109,37 +124,28 @@ class CADFolderDB():
             type TEXT,
             last_modified TEXT
             )
-            ''')
+        ''')
 
-        #блок для получения списка папок из главной бд
-        #и занесения этих папок в NerpaSyncVault
-        self.main_cursor.execute("""
-                    SELECT network_path, last_modified FROM
-                    file_structure WHERE type='directory' """)
+        # Синхронизация директорий
+        self.main_cursor.execute("SELECT network_path, last_modified FROM file_structure WHERE type='directory'")
         network_directories = self.main_cursor.fetchall()
 
-        for network_path in network_directories:
-            adding_flag = False
-            local_directory_path = local_root
-            network_path_parts = network_path[0].split('/')
-            for part in network_path_parts:
-                if 'CAD' in part:
-                    adding_flag = True
-                if adding_flag is True:
-                    local_directory_path += '\\'+part
-                
-            local_directory_parts = local_directory_path.split('\\')
-            local_directory_name = local_directory_parts[-1]
-    
+        synced_local_paths = set()
+
+        for network_path, last_modified in network_directories:
+            local_directory_path = local_root + network_path.split('CAD', 1)[-1].replace('/', '\\')
+            local_directory_name = os.path.basename(local_directory_path)
+
             # Проверка наличия записи перед вставкой
             user_cursor.execute('''
                 SELECT 1 FROM file_structure WHERE name = ? AND local_path = ? AND type = 'directory'
             ''', (local_directory_name, local_directory_path))
             exists = user_cursor.fetchone()
 
+            synced_local_paths.add(local_directory_path)
+
             if not exists:
-                # Если запись не найдена, вставляем новую запись
-                # и создаем папку в Vault
+                # Вставляем новую запись и создаем директорию в локальном хранилище
                 user_cursor.execute('''
                     INSERT INTO file_structure 
                     (name, local_path, status, type, last_modified)
@@ -149,38 +155,32 @@ class CADFolderDB():
                     local_directory_path,
                     'Зарегистрирован', 
                     'directory', 
-                    network_path[1]
+                    last_modified
                 ))
                 os.makedirs(local_directory_path, exist_ok=True)
+                print('Создана папка по пути {}'.format(local_directory_path))
         
-        #блок получения списка файлов для копирования
-        self.main_cursor.execute("""
-                    SELECT network_path, last_modified FROM
-                    file_structure WHERE type='file'""")
+        # Синхронизация файлов
+        self.main_cursor.execute("SELECT network_path, last_modified FROM file_structure WHERE type='file'")
         network_files = self.main_cursor.fetchall()
 
-        for network_path in network_files:
-            adding_flag = False
-            local_file_path = local_root
-            network_path_parts = network_path[0].split('/')
-            for part in network_path_parts:
-                if 'CAD' in part:
-                    adding_flag = True
-                if adding_flag is True:
-                    local_file_path += '\\'+part
-            
-            local_file_path_parts = local_file_path.split('\\')
-            local_file_name = local_file_path_parts[-1]
+        for network_path, last_modified in network_files:
+            local_file_path = local_root + network_path.split('CAD', 1)[-1].replace('/', '\\')
+            local_file_name = os.path.basename(local_file_path)
 
             # Проверка наличия записи перед вставкой
             user_cursor.execute('''
                 SELECT 1 FROM file_structure WHERE name = ? AND local_path = ? AND type = 'file'
             ''', (local_file_name, local_file_path))
             exists = user_cursor.fetchone()
+
+            synced_local_paths.add(local_file_path)
+
             if not exists:
-                local_file_dist = '\\'.join(local_file_path_parts[:-1])
-                # Если запись не найдена, вставляем новую запись
-                # и копируем файл в Vault
+                local_file_dir = os.path.dirname(local_file_path)
+                os.makedirs(local_file_dir, exist_ok=True)
+
+                # Вставляем новую запись и копируем файл в локальное хранилище
                 user_cursor.execute('''
                     INSERT INTO file_structure 
                     (name, local_path, status, type, last_modified)
@@ -190,9 +190,27 @@ class CADFolderDB():
                     local_file_path,
                     'Зарегистрирован', 
                     'file', 
-                    network_path[1]
+                    last_modified
                 ))
-                shutil.copy(network_path[0], local_file_dist)
+                shutil.copy2(network_path, local_file_path)
+                print('Попытка создать папку по пути {}, копирование файла {}'.format(local_file_dir, local_file_name))
+
+        # Удаление файлов и папок, которых нет на сетевом диске
+        user_cursor.execute("SELECT local_path FROM file_structure")
+        local_paths = set(row[0] for row in user_cursor.fetchall())
+
+        paths_to_delete = local_paths - synced_local_paths
+
+        for path in paths_to_delete:
+            if os.path.exists(path):
+                if os.path.isfile(path):
+                    os.remove(path)
+                    print('Удален {}'.format(path))
+                elif os.path.isdir(path):
+                    shutil.rmtree(path)
+                    print('Удален {}'.format(path))
+                # Удалить запись из локальной базы данных
+                user_cursor.execute("DELETE FROM file_structure WHERE local_path = ?", (path,))
 
         user_conn.commit()
         user_conn.close()

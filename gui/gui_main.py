@@ -113,11 +113,11 @@ class NerpaSyncMain(gui_window.Window):
     def sync_network_to_local(self):
         cad_folder_db = DBMngModule.CADFolderDB()
         cad_folder_db.sync_to_local()
+        self.update_treeview()
 
     def update_cad_folder(self):
         cad_folder_db = DBMngModule.CADFolderDB()
-        folder_path = filedialog.askdirectory(title='Выберите папку CAD FOLDER')
-        cad_folder_db.update_project(folder_path)
+        cad_folder_db.update_project()
         self.update_treeview()
 
     def do_nothing(self):
