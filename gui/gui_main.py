@@ -25,9 +25,7 @@ class NerpaSyncMain(gui_window.Window):
 
         self.create_tree_view()
 
-        self.cad_db = CADFolderDB(
-            update_treeview_callback=self.update_treeview,
-        )
+        self.cad_db = CADFolderDB()
         self.update_treeview()
 
         self.main_root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -88,11 +86,11 @@ class NerpaSyncMain(gui_window.Window):
                     parent_id = tree_items.get(parent, '')
                     if i == len(path_parts) - 1:
                         if item_type == "directory":
-                            tree_id = self.tree.insert(parent_id, 'end', text=part, open=False)
+                            tree_id = self.tree.insert(parent_id, 'end', text=part)
                         else:
-                            self.tree.insert(parent_id, 'end', text=part, values=(status, last_modified))
+                            tree_id = self.tree.insert(parent_id, 'end', text=part, values=(status, last_modified))
                     else:
-                        tree_id = self.tree.insert(parent_id, 'end', text=part, open=False)
+                        tree_id = self.tree.insert(parent_id, 'end', text=part)
 
                     tree_items[current_path] = tree_id
 
@@ -102,11 +100,35 @@ class NerpaSyncMain(gui_window.Window):
         """
         Обновляет содержимое Treeview, очищая его и заполняя заново.
         """
+        open_nodes = []
+
+        def save_state(node):
+            if self.tree.item(node, 'open'):
+                if node not in open_nodes:
+                    open_nodes.append(node)
+            for child in self.tree.get_children(node):
+                save_state(child)
+
+        # Сохранение состояния открытых узлов
+        for node in self.tree.get_children():
+            save_state(node)
+        # Очистка Treeview
         for item in self.tree.get_children():
             self.tree.delete(item)
 
+        # Получение данных и заполнение Treeview
         tree_data = self.get_data_to_tree()
         self.populate_treeview(tree_data)
+
+        def restore_state(node):
+            if node in open_nodes:
+                self.tree.item(node, open=True)
+            for child in self.tree.get_children(node):
+                restore_state(child)
+
+        # Восстановление состояния для корневых узлов
+        for node in self.tree.get_children():
+            restore_state(node)
 
     def sync_network_to_local(self):
         self.cad_db.sync_to_local()

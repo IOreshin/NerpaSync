@@ -24,13 +24,12 @@ def read_json(path_to_file):
     return (templates)
 
 class CADFolderDB():
-    def __init__(self, update_treeview_callback):
+    def __init__(self):
         path_to_config = os.path.dirname(os.path.abspath(__file__))+'\\config.json'
         config = read_json(path_to_config)
         self.root_dir = '\\'+config['PROJECT ROOT'][0]
 
         self.db_path = project_root+'\\databases\\CADFolder.db'
-        self.update_treeview_callback = update_treeview_callback
 
     def update_project(self):
         # Создание нового соединения для каждого вызова
@@ -79,6 +78,7 @@ class CADFolderDB():
                         last_modified,
                         full_path
                     ))
+                    print('Обновлена папка {}'.format(dirname))
                 # Удаляем обработанный путь из exists_paths, так как он больше не требуется
                 if full_path in exists_paths:
                     del exists_paths[full_path]
@@ -108,6 +108,7 @@ class CADFolderDB():
                             last_modified,
                             full_path
                         ))
+                        print('Обновлен файл {} в БД'.format(filename))
                     # Удаляем обработанный путь из exists_paths
                     if full_path in exists_paths:
                         del exists_paths[full_path]
@@ -120,8 +121,6 @@ class CADFolderDB():
         conn.commit()
         conn.close()
 
-        if self.update_treeview_callback:
-            self.update_treeview_callback()
 
     def check_for_changes(self):
         """
