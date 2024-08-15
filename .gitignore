@@ -7,6 +7,8 @@ __pycache__/
 *.so
 
 # Distribution / packaging
+/sitepackages
+/databases
 databases/
 .Python
 build/
