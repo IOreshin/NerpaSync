@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 
-import os, sys
+import os, sys, time
 
 from gui import NerpaSyncMain
 
+
 if __name__ == '__main__':
     window = NerpaSyncMain()
+

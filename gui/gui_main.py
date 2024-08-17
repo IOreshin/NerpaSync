@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
+
 import os
 import sys
 import sqlite3
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
+
+import queue
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -13,6 +16,8 @@ if project_root not in sys.path:
 
 from gui import gui_window
 from src.DBMngModule import CADFolderDB
+from src.KompasEventsHandler import KompasFrameHandler
+from getpass import getuser
 
 class RedirectText:
     def __init__(self, text_widget):
@@ -33,34 +38,117 @@ class NerpaSyncMain(gui_window.Window):
         self.main_root = tk.Tk()
         self.main_root.title('TkPDM')
         self.main_root.resizable(False, False)
+        self.db_path = project_root+'\\databases\\CADFolder.db'
+        self.last_modified_time = os.path.getmtime(self.db_path)
+        
+        self.kompas_handler_running = True  # Флаг для управления потоком
 
-
+        self.user_name = getuser()  # Получаем имя текущего пользователя
+        
+        #инициализация UI
         self.init_frames()
         self.init_buttons()
-
         self.create_tree_view()
 
-        self.cad_db = CADFolderDB()
-        self.update_treeview()
+        try:
+            self.cad_db = CADFolderDB()
+            self.update_treeview()
+        except:
+            pass
 
         # Перенаправляем стандартный вывод в текстовый виджет
-        self.redirect_stdout()
+        #self.redirect_stdout()
 
         self.main_root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        self.event_queue = queue.Queue()
+
+        # Инициализация и запуск обработчика событий Kompas в отдельном потоке
+        self.kompas_handler = KompasFrameHandler(self.event_queue)
+        self.kompas_handler.start()
+
+        # Запуск проверки очереди событий
+        self.main_root.after(10, self.check_event_queue)
+        # Запуск периодической проверки изменений в БД
+        self.main_root.after(1000, self.check_db_changes)
+        
         self.main_root.mainloop()
+
+    def check_db_changes(self):
+        try:
+            current_modified_time = os.path.getmtime(self.db_path)
+            if current_modified_time != self.last_modified_time:
+                print("База данных была изменена.")
+                self.last_modified_time = current_modified_time
+                self.on_database_change()
+
+        except Exception as e:
+            print("Ошибка при проверке изменений в БД: {}".format(e))
+
+        # Повторяем проверку через 1 секунду (1000 мс)
+        self.main_root.after(1000, self.check_db_changes)
+
+    def on_database_change(self):
+        # Здесь вызывается функция, которую нужно выполнить при изменении БД
+        self.cad_db.sync_to_local()
+        # Например, вы можете обновить TreeView:
+        self.update_treeview()
+
+    def check_event_queue(self):
+        while not self.event_queue.empty():
+            message = self.event_queue.get_nowait()
+            # Обрабатываем сообщения о документах
+            if isinstance(message, str):
+                doc_name = message
+                self.handle_document_status(doc_name)
+
+        self.main_root.after(100, self.check_event_queue)
+
+
+    def handle_document_status(self, doc_name):
+        # Проверка наличия документа в TreeView
+        for item in self.tree.get_children():
+            node = self._find_node_by_text(item, doc_name)
+            if node:
+                item_values = self.tree.item(node, "values")
+                status = item_values[0] if item_values else ""
+                if status == "Зарегистрирован":
+                    response = messagebox.askyesno(
+                        "Разрегистрация документа",
+                        "Документ '{}' зарегистрирован. Хотите разрегистрировать его?".format(doc_name)
+                    )
+                    if response:
+                        self.cad_db.update_file_status(doc_name, "unregister")
+                        self.update_treeview()
+                break
+
+            
+    def _find_node_by_text(self, item, text):
+        """
+        Рекурсивно находит узел по тексту.
+        """
+        if self.tree.item(item, 'text') == text:
+            return item
+        for child in self.tree.get_children(item):
+            result = self._find_node_by_text(child, text)
+            if result:
+                return result
+        return None
 
     def init_frames(self):
         self.frames = {
             'admin': ttk.LabelFrame(self.main_root, borderwidth=5, relief='solid', text='Администрирование'),
             'treeview': ttk.LabelFrame(self.main_root, borderwidth=5, relief='solid', text='Дерево проекта'),
             'manager': ttk.LabelFrame(self.main_root, borderwidth=5, relief='solid', text='Управление файлами'),
+            'file_maker': ttk.LabelFrame(self.main_root, borderwidth=5, relief='solid', text='Создание новых файлов'),
             'logs': ttk.LabelFrame(self.main_root, borderwidth=5, relief='solid', text='Логирование'),
         }
 
         self.frames['admin'].grid(row=0, column=0, padx=5, pady=5)
         self.frames['treeview'].grid(row=0, column=1, padx=5, pady=5, rowspan=2)
         self.frames['manager'].grid(row=1, column=0, padx=5, pady=5)
-        self.frames['logs'].grid(row=2, column=0, padx=5, pady=5, columnspan=2)
+        self.frames['file_maker'].grid(row=2, column=0, padx=5, pady=5)
+        self.frames['logs'].grid(row=2, column=1, padx=5, pady=5)
 
         # Создание текстового виджета для логирования
         self.log_text = scrolledtext.ScrolledText(self.frames['logs'], wrap=tk.WORD, height=8)
@@ -82,6 +170,9 @@ class NerpaSyncMain(gui_window.Window):
         self.tree.heading('#0', text='Name')
         self.tree.heading('Status', text='Status')
         self.tree.heading('Last Modified', text='Last Modified')
+
+        # Привязываем событие на изменение выделения в TreeView
+        self.tree.bind("<<TreeviewSelect>>", self.on_treeview_select)
 
     def get_data_to_tree(self):
         conn = sqlite3.connect(os.path.join(project_root, 'databases', 'CADFolder.db'))
@@ -221,6 +312,25 @@ class NerpaSyncMain(gui_window.Window):
             self.cad_db.update_file_status(file_name, "register")
             self.update_treeview()
 
+    def on_treeview_select(self, event):
+        self.update_buttons_state()
+
+    def update_buttons_state(self):
+        selected_item = self.tree.selection()
+
+        # Деактивируем кнопки по умолчанию
+        self.register_button.state(['disabled'])
+        self.unregister_button.state(['disabled'])
+
+        if selected_item:
+            item_values = self.tree.item(selected_item, "values")
+            status = item_values[0] if item_values else ""
+            # Активируем кнопки в зависимости от условий
+            if status == "Зарегистрирован":
+                self.unregister_button.state(['!disabled'])
+            elif status != "Зарегистрирован" and status == self.user_name:
+                self.register_button.state(['!disabled'])
+
     def do_nothing(self):
         pass
 
@@ -233,7 +343,15 @@ class NerpaSyncMain(gui_window.Window):
              {'text': 'Разрегистрировать файл', 'frame': 'manager',
              'command': self.unregister_file, 'state': 'normal', 'row': 2, 'col': 0},
              {'text': 'Зарегистрировать файл', 'frame': 'manager',
-             'command': self.register_file, 'state': 'normal', 'row': 3, 'col': 0}
+             'command': self.register_file, 'state': 'normal', 'row': 3, 'col': 0},
+             {'text': 'Открыть файл', 'frame': 'manager',
+             'command': self.do_nothing, 'state': 'normal', 'row': 4, 'col': 0},
+             {'text': 'Создать сборку', 'frame': 'file_maker',
+             'command': self.do_nothing, 'state': 'normal', 'row': 0, 'col': 0},
+             {'text': 'Создать деталь', 'frame': 'file_maker',
+             'command': self.do_nothing, 'state': 'normal', 'row': 1, 'col': 0},
+             {'text': 'Создать чертеж', 'frame': 'file_maker',
+             'command': self.do_nothing, 'state': 'normal', 'row': 2, 'col': 0},
         ]
 
         buttons = []
@@ -241,13 +359,19 @@ class NerpaSyncMain(gui_window.Window):
             frame = self.frames[config['frame']]
             row = config['row']
             col = config['col']
-            buttons.append(self.create_button(ttk,
-                                              frame,
-                                              config['text'],
-                                              config['command'],
-                                              40,
-                                              config['state'],
-                                              row, col))
+            button = self.create_button(ttk,
+                                        frame,
+                                        config['text'],
+                                        config['command'],
+                                        40,
+                                        config['state'],
+                                        row, col)
+            buttons.append(button)
+            if config['text'] == 'Зарегистрировать файл':
+                self.register_button = button
+            elif config['text'] == 'Разрегистрировать файл':
+                self.unregister_button = button
+
         return buttons
 
     def on_closing(self):
@@ -255,6 +379,7 @@ class NerpaSyncMain(gui_window.Window):
         Обработка закрытия окна, завершение потока сканирования.
         """
         if messagebox.askokcancel("Выход", "Вы действительно хотите выйти?"):
+            self.kompas_handler.stop()  # Завершаем цикл обработки сообщений
             self.main_root.destroy()
 
 if __name__ == '__main__':

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 # Определяем путь к корневой директории проекта
-import os, sys
+import os, sys, stat
 from datetime import datetime
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -8,120 +8,20 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-import json
+
 import sqlite3
 import shutil
 from getpass import getuser
 import tkinter as tk
 
+from .KompasUtility import KompasThreadFuncs, ReopenDoc
+
 from tkinter import filedialog
 
-def read_json(path_to_file):
-    '''
-    Считывает JSON файл из переданного пути
-    и возвращает полученную информацию
-    '''
-    with open(path_to_file,'r', encoding='utf-8') as Json_file:
-        templates = json.load(Json_file)
-    return (templates)
 
 class CADFolderDB():
     def __init__(self):
-
         self.db_path = project_root+'\\databases\\CADFolder.db'
-
-    def update_project_(self):
-        # Создание нового соединения для каждого вызова
-        project_path = filedialog.askdirectory()
-        print('Полный путь к папке проекта: {}'.format(project_path))
-        if project_path:
-            conn = sqlite3.connect(self.db_path)
-            print('Установлено соединение с базой данных CADFolder.db')
-            cursor = conn.cursor()
-
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS file_structure (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT,
-                network_path TEXT,
-                status TEXT,
-                type TEXT,
-                last_modified TEXT
-                )
-            ''')
-
-            # Создание множества всех существующих путей и их времени модификации
-            exists_paths = {}
-            cursor.execute('SELECT network_path, last_modified FROM file_structure')
-            exists_paths = {row[0]: row[1] for row in cursor.fetchall()}
-
-            for dirpath, dirnames, filenames in os.walk(project_path):
-                for dirname in dirnames:
-                    full_path = os.path.join(dirpath, dirname).replace("\\", "/")
-                    last_modified = datetime.fromtimestamp(os.path.getmtime(full_path)).isoformat()
-                    if full_path not in exists_paths:
-                        cursor.execute('''
-                            INSERT INTO file_structure 
-                            (name, network_path, status, type, last_modified)
-                            VALUES (?, ?, ?, ?, ?)
-                        ''', (
-                            dirname, 
-                            full_path,
-                            'Зарегистрирован', 
-                            'directory', 
-                            last_modified
-                        ))
-                    elif exists_paths[full_path] != last_modified:
-                        cursor.execute('''
-                            UPDATE file_structure 
-                            SET last_modified = ?
-                            WHERE network_path = ?
-                        ''', (
-                            last_modified,
-                            full_path
-                        ))
-                        print('Обновлена папка {}'.format(dirname))
-                    # Удаляем обработанный путь из exists_paths, так как он больше не требуется
-                    if full_path in exists_paths:
-                        del exists_paths[full_path]
-
-                for filename in filenames:
-                    if not filename.startswith('~') and filename[-3:] not in ['bak']:
-                        full_path = os.path.join(dirpath, filename).replace("\\", "/")
-                        last_modified = datetime.fromtimestamp(os.path.getmtime(full_path)).isoformat()
-                        if full_path not in exists_paths:
-                            cursor.execute('''
-                                INSERT INTO file_structure 
-                                (name, network_path, status, type, last_modified)
-                                VALUES (?, ?, ?, ?, ?)
-                            ''', (
-                                filename, 
-                                full_path,
-                                'Зарегистрирован', 
-                                'file', 
-                                last_modified
-                            ))
-                        elif exists_paths[full_path] != last_modified:
-                            cursor.execute('''
-                                UPDATE file_structure 
-                                SET last_modified = ?
-                                WHERE network_path = ?
-                            ''', (
-                                last_modified,
-                                full_path
-                            ))
-                            print('Обновлен файл {} в БД'.format(filename))
-                        # Удаляем обработанный путь из exists_paths
-                        if full_path in exists_paths:
-                            del exists_paths[full_path]
-
-            # Удаление записей, которые не были найдены в текущем обходе директории
-            if exists_paths:
-                for path in exists_paths:
-                    cursor.execute("""DELETE FROM file_structure WHERE network_path = ?""", (path,))
-
-            conn.commit()
-            conn.close()
 
     def update_project(self):
         project_path = filedialog.askdirectory()
@@ -164,6 +64,7 @@ class CADFolderDB():
                             WHERE network_path = ?
                         ''', (last_modified, full_path))
                     exists_paths.pop(full_path, None)
+                    self.set_read_only(full_path)
 
                 for filename in filenames:
                     if not filename.startswith('~') and filename[-3:] not in ['bak']:
@@ -182,6 +83,7 @@ class CADFolderDB():
                                 WHERE network_path = ?
                             ''', (last_modified, full_path))
                         exists_paths.pop(full_path, None)
+                        self.set_read_only(full_path)
 
             # Удаление несуществующих путей
             if exists_paths:
@@ -191,6 +93,11 @@ class CADFolderDB():
             conn.commit()
             print('База данных обновлена')
 
+    def set_read_only(self, file_path):
+        try:
+            os.chmod(file_path, stat.S_IREAD)
+        except Exception as e:
+            print("Ошибка при установке атрибута 'только для чтения' для {}: {}".format(file_path,e))
 
     def check_for_changes(self):
         """
@@ -291,7 +198,9 @@ class CADFolderDB():
                         ''', (local_file_name, local_file_path, 'Зарегистрирован', 'file', last_modified))
                         shutil.copy2(network_path, local_file_path)
                         print('Копирование файла {} в {}'.format(local_file_name, local_file_path))
+                        self.set_read_only(local_file_path)
                     elif exists[0] != last_modified:
+                        os.chmod(local_file_path, 0o666)
                         shutil.copy2(network_path, local_file_path)
                         user_cursor.execute('''
                             UPDATE file_structure
@@ -299,6 +208,7 @@ class CADFolderDB():
                             WHERE local_path = ? AND type = 'file'
                         ''', (last_modified, local_file_path))
                         print('Обновлен файл {} в {}'.format(local_file_name, local_file_path))
+                        self.set_read_only(local_file_path)
 
                 # Удаление файлов и папок, которых нет на сетевом диске
                 user_cursor.execute("SELECT local_path FROM file_structure")
@@ -310,9 +220,11 @@ class CADFolderDB():
                     if os.path.exists(path):
                         try:
                             if os.path.isfile(path):
+                                os.chmod(path, 0o666)
                                 os.remove(path)
                                 print('Удален файл {}'.format(path))
                             elif os.path.isdir(path):
+                                os.chmod(path, 0o666)
                                 shutil.rmtree(path, ignore_errors=True)
                                 print('Удалена папка {}'.format(path))
                             user_cursor.execute("DELETE FROM file_structure WHERE local_path = ?", (path,))
@@ -326,41 +238,39 @@ class CADFolderDB():
             print("Ошибка синхронизации с локальным хранилищем: {}".format(e))
 
     def update_file_status(self, file_name, action):
-        # Подключение к базе данных
+        # Подключение к главной базе данных
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         print('Подключение к главной БД')
-
+        
         # Поиск файла по имени
         cursor.execute("SELECT network_path FROM file_structure WHERE name = ?", (file_name,))
         result = cursor.fetchone()
+        # Подключение к локальной базе данных
+        user_name = getuser()
+        user_db = project_root + '\\databases\\CADFolder_{}.db'.format(user_name)
+        user_conn = sqlite3.connect(user_db)
+        user_cursor = user_conn.cursor()
+        print('Подключение к локальной базе данных')
 
         if result:
-            file_path = result[0]
-
+            network_file_path = result[0]
             if action == "unregister":
                 # Обновление статуса в базе данных
                 cursor.execute("UPDATE file_structure SET status = ? WHERE name = ?", (getuser(), file_name))
-                # Установка атрибута "только для чтения" на сетевом диске
-                os.chmod(file_path, 0o444)
-                print("Файл {} разрегистрирован. На сетевом диске установлен статус только для чтения".format(file_name))
+                #получение пути к файлу на локальном диске
+                user_cursor.execute("SELECT local_path FROM file_structure WHERE name = ?", (file_name,))
+                local_file_path = user_cursor.fetchone()[0]
+                local_file_path = os.path.normpath(local_file_path)
+                # Снятие атрибута "только для чтения" на локальном диске
+                os.chmod(local_file_path, 0o666)
+
+                ReopenDoc(read_only=False)
+
+                print("Файл {} разрегистрирован".format(file_name))
 
             elif action == "register":
                 # Создание локального пути к файлу
-                local_file_path = os.path.join(
-                    os.getenv('USERPROFILE'),
-                    'AppData',
-                    'NerpaSyncVault',
-                    'YKProject folder',
-                )
-                user_name = getuser()
-                user_db = project_root + '\\databases\\CADFolder_{}.db'.format(user_name)
-                local_root = os.path.join(os.getenv('USERPROFILE'), 'AppData', 'NerpaSyncVault', 'YKProject')
-
-                # Создание или подключение пользовательской базы данных
-                user_conn = sqlite3.connect(user_db)
-                user_cursor = user_conn.cursor()
-                print('Установлено подключение к локальной базе данных')
                 user_cursor.execute("SELECT local_path FROM file_structure WHERE name = ?", (file_name,))
                 local_file_path = user_cursor.fetchone()[0]
                 # Нормализация пути для текущей ОС
@@ -374,15 +284,23 @@ class CADFolderDB():
                     return
 
                 # Снятие атрибута "только для чтения"
-                os.chmod(file_path, 0o666)
+                os.chmod(network_file_path, 0o666)
 
                 # Копирование файла с локального хранилища на сетевой диск с заменой
-                shutil.copy2(local_file_path, file_path)
+                shutil.copy2(local_file_path, network_file_path)
+
+                # Установка атрибута "только для чтения"
+                self.set_read_only(network_file_path)
+                self.set_read_only(local_file_path)
+
+                ReopenDoc(read_only=True)
 
                 # Обновление статуса в базе данных
+                last_modified = datetime.fromtimestamp(os.path.getmtime(network_file_path)).isoformat()
                 cursor.execute("UPDATE file_structure SET status = 'Зарегистрирован' WHERE name = ?", (file_name,))
+                cursor.execute("UPDATE file_structure SET last_modified = ? WHERE name = ?", (last_modified, file_name,))
                 print("Файл {} зарегистрирован и скопирован на сетевой диск".format(file_name))
-
+  
         conn.commit()
         conn.close()
 
