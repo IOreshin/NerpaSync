@@ -22,6 +22,34 @@ from tkinter import filedialog
 class CADFolderDB():
     def __init__(self):
         self.db_path = project_root+'\\databases\\CADFolder.db'
+        self.username = getuser()
+
+    def init_user_track(self):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''CREATE TABLE IF NOT EXISTS
+                           user_tracking(
+                           id INTEGER PRIMARY KEY AUTOINCREMENT,
+                           last_user TEXT)''')
+            cursor.execute('''INSERT INTO user_tracking (last_user)
+                           VALUES (?)''', (self.username,))
+            conn.commit()
+
+    def update_last_user(self):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE user_tracking
+                SET last_user = ?
+                WHERE id = 1
+            ''', (self.username,))
+            conn.commit()
+
+    def get_last_user(self):
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute('''SELECT last_user FROM user_tracking''')
+            return cursor.fetchone()[0]
 
     def update_project(self):
         project_path = filedialog.askdirectory()
@@ -99,27 +127,6 @@ class CADFolderDB():
         except Exception as e:
             print("Ошибка при установке атрибута 'только для чтения' для {}: {}".format(file_path,e))
 
-    def check_for_changes(self):
-        """
-        Проверяет наличие изменений на сетевом диске и уведомляет пользователя.
-        """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute('SELECT network_path, last_modified FROM file_structure')
-        existing_files = cursor.fetchall()
-
-        changed_files = []
-
-        for path, last_modified in existing_files:
-            if os.path.exists(path):
-                if datetime.fromtimestamp(os.path.getmtime(path)).isoformat() != last_modified:
-                    changed_files.append(path)
-            else:
-                changed_files.append(path)
-
-        conn.close()
-       
     def sync_to_local(self):
         user_name = getuser()
         user_db = project_root + '\\databases\\CADFolder_{}.db'.format(user_name)
@@ -128,7 +135,6 @@ class CADFolderDB():
             with sqlite3.connect(user_db) as user_conn, sqlite3.connect(self.db_path) as conn:
                 user_cursor = user_conn.cursor()
                 cursor = conn.cursor()
-
                 user_cursor.execute('''
                     CREATE TABLE IF NOT EXISTS file_structure (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -303,6 +309,8 @@ class CADFolderDB():
   
         conn.commit()
         conn.close()
+
+
 
            
 

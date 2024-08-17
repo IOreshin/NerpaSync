@@ -57,7 +57,7 @@ class NerpaSyncMain(gui_window.Window):
             pass
 
         # Перенаправляем стандартный вывод в текстовый виджет
-        #self.redirect_stdout()
+        self.redirect_stdout()
 
         self.main_root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -77,7 +77,8 @@ class NerpaSyncMain(gui_window.Window):
     def check_db_changes(self):
         try:
             current_modified_time = os.path.getmtime(self.db_path)
-            if current_modified_time != self.last_modified_time:
+            last_user = self.cad_db.get_last_user()
+            if current_modified_time != self.last_modified_time and last_user != getuser():
                 print("База данных была изменена.")
                 self.last_modified_time = current_modified_time
                 self.on_database_change()
@@ -117,9 +118,11 @@ class NerpaSyncMain(gui_window.Window):
                         "Разрегистрация документа",
                         "Документ '{}' зарегистрирован. Хотите разрегистрировать его?".format(doc_name)
                     )
+                    self.cad_db.update_last_user()
                     if response:
                         self.cad_db.update_file_status(doc_name, "unregister")
                         self.update_treeview()
+                        self.cad_db.update_last_user()
                 break
 
             
@@ -293,6 +296,7 @@ class NerpaSyncMain(gui_window.Window):
     def sync_network_to_local(self):
         self.cad_db.sync_to_local()
         self.update_treeview()
+        
 
     def update_cad_folder(self):
         self.cad_db.update_project()
@@ -304,6 +308,7 @@ class NerpaSyncMain(gui_window.Window):
             file_name = self.tree.item(selected_item)["text"]
             self.cad_db.update_file_status(file_name, "unregister")
             self.update_treeview()
+            self.cad_db.update_last_user()
 
     def register_file(self):
         selected_item = self.tree.selection()
@@ -311,6 +316,7 @@ class NerpaSyncMain(gui_window.Window):
             file_name = self.tree.item(selected_item)["text"]
             self.cad_db.update_file_status(file_name, "register")
             self.update_treeview()
+            self.cad_db.update_last_user()
 
     def on_treeview_select(self, event):
         self.update_buttons_state()
