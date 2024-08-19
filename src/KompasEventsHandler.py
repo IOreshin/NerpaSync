@@ -36,6 +36,7 @@ class KompasFrameHandler(threading.Thread):
                     if doc_name != self.last_doc_name:
                         self.event_queue.put(doc_name) #возвращение имени документа
                         self.last_doc_name = doc_name
+                        
             except Exception as e:
                 self.event_queue.put("Ошибка при доступе к документу: {}".format(e))
             time.sleep(0.5)  # Периодическая проверка каждые 0,5 секунд

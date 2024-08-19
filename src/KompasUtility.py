@@ -110,36 +110,28 @@ class KompasItem:
         except:
             return False
 
-class KompasThreadFuncs(threading.Thread):
-    def __init__(self, read_only):
+class SetStatusDoc(KompasAPI):
+    def __init__(self, read_only:bool, file_path:str):
         super().__init__()
         self.read_only = read_only
+        self.file_path = file_path
+        self.set_doc_status()
 
-    def run(self):
-        pythoncom.CoInitialize()
-        try:
-            self.app = Dispatch('Kompas.Application.7')
-            doc = self.app.ActiveDocument
-            doc_path = doc.PathName
-            doc.Close(0)
-            iDocuments = self.app.Documents
-            iDocuments.Open(doc_path, True, self.read_only)
-
-        except Exception as e:
-            print(e)
-        finally:
-            pythoncom.CoInitialize()
-
-class ReopenDoc(KompasAPI):
-    def __init__(self, read_only):
-        super().__init__()
-        self.read_only = read_only
-        self.reopen()
-
-    def reopen(self):
-        doc = self.app.ActiveDocument
-        doc_path = doc.PathName
-        doc.Close(0)
+    def set_doc_status(self):
         iDocuments = self.app.Documents
-        iDocuments.Open(doc_path, True, self.read_only)
+        for i in range(iDocuments.Count):
+            if iDocuments.Item(self.file_path):
+                iKompasDocument = iDocuments.Item(self.file_path)
+                iKompasDocument.ReadOnly = self.read_only
+                break
 
+class OpenDoc(KompasAPI):
+    def __init__(self, open_state:bool,file_path:str):
+        super().__init__()
+        self.file_path = file_path
+        self.open_state = open_state
+        self.open_doc()
+
+    def open_doc(self):
+        iDocuments = self.app.Documents
+        iDocuments.Open(self.file_path, True, self.open_state)

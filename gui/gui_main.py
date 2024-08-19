@@ -17,6 +17,7 @@ if project_root not in sys.path:
 from gui import gui_window
 from src.DBMngModule import CADFolderDB
 from src.KompasEventsHandler import KompasFrameHandler
+from src.KompasUtility import OpenDoc
 from getpass import getuser
 
 class RedirectText:
@@ -32,15 +33,28 @@ class RedirectText:
         # Необходимо для совместимости с файловым интерфейсом
         pass
 
+class InitProject:
+    def __init__(self) -> None:
+        self.create_project()
+
+    def create_project(self):
+        CADFolderDB().update_project()
+
 class NerpaSyncMain(gui_window.Window):
     def __init__(self) -> None:
         super().__init__()
-        self.main_root = tk.Tk()
-        self.main_root.title('TkPDM')
-        self.main_root.resizable(False, False)
         self.db_path = project_root+'\\databases\\CADFolder.db'
+        try:
+            self.last_modified_time = os.path.getmtime(self.db_path)
+        except:
+            print('Отсутсвует база данных проекта. Выберите папку с проектом')
+            InitProject()
+
+        self.main_root = tk.Tk()
+        self.main_root.title('NerpaSync')
+        self.main_root.resizable(False, False)
+
         self.last_modified_time = os.path.getmtime(self.db_path)
-        
         self.kompas_handler_running = True  # Флаг для управления потоком
 
         self.user_name = getuser()  # Получаем имя текущего пользователя
@@ -72,6 +86,7 @@ class NerpaSyncMain(gui_window.Window):
         # Запуск периодической проверки изменений в БД
         self.main_root.after(1000, self.check_db_changes)
         
+        self.main_root.update_idletasks()
         self.main_root.mainloop()
 
     def check_db_changes(self):
@@ -123,6 +138,7 @@ class NerpaSyncMain(gui_window.Window):
                         self.cad_db.update_file_status(doc_name, "unregister")
                         self.update_treeview()
                         self.cad_db.update_last_user()
+
                 break
 
             
@@ -297,7 +313,6 @@ class NerpaSyncMain(gui_window.Window):
         self.cad_db.sync_to_local()
         self.update_treeview()
         
-
     def update_cad_folder(self):
         self.cad_db.update_project()
         self.update_treeview()
@@ -327,18 +342,43 @@ class NerpaSyncMain(gui_window.Window):
         # Деактивируем кнопки по умолчанию
         self.register_button.state(['disabled'])
         self.unregister_button.state(['disabled'])
+        self.open_file_button.state(['disabled'])
 
         if selected_item:
             item_values = self.tree.item(selected_item, "values")
             status = item_values[0] if item_values else ""
             # Активируем кнопки в зависимости от условий
             if status == "Зарегистрирован":
+                self.open_file_button.state(['!disabled'])
                 self.unregister_button.state(['!disabled'])
             elif status != "Зарегистрирован" and status == self.user_name:
+                self.open_file_button.state(['!disabled'])
                 self.register_button.state(['!disabled'])
 
     def do_nothing(self):
         pass
+
+    def open_doc(self):
+        selected_item = self.tree.selection()
+
+        if selected_item:
+            try:
+                item_name = self.tree.item(selected_item)['text']
+                item_status = self.tree.item(selected_item)['values'][0]
+                user_db = project_root + '\\databases\\CADFolder_{}.db'.format(self.user_name)
+                with sqlite3.connect(user_db) as user_conn:
+                    user_cursor = user_conn.cursor()
+                    user_cursor.execute('''SELECT local_path FROM file_structure
+                                        WHERE name = ?''', (item_name,))
+                    local_path = user_cursor.fetchone()[0]
+                if local_path:
+                    if item_status != self.user_name:
+                        OpenDoc(open_state=True, file_path=local_path)
+                    else:
+                        OpenDoc(open_state=False, file_path=local_path)
+            except Exception as e:
+                print('Ошибка в получении пути к локальному файлу: {}'.format(e))
+
 
     def init_buttons(self):
         button_config = [
@@ -351,7 +391,7 @@ class NerpaSyncMain(gui_window.Window):
              {'text': 'Зарегистрировать файл', 'frame': 'manager',
              'command': self.register_file, 'state': 'normal', 'row': 3, 'col': 0},
              {'text': 'Открыть файл', 'frame': 'manager',
-             'command': self.do_nothing, 'state': 'normal', 'row': 4, 'col': 0},
+             'command': self.open_doc, 'state': 'normal', 'row': 4, 'col': 0},
              {'text': 'Создать сборку', 'frame': 'file_maker',
              'command': self.do_nothing, 'state': 'normal', 'row': 0, 'col': 0},
              {'text': 'Создать деталь', 'frame': 'file_maker',
@@ -377,6 +417,8 @@ class NerpaSyncMain(gui_window.Window):
                 self.register_button = button
             elif config['text'] == 'Разрегистрировать файл':
                 self.unregister_button = button
+            elif config['text'] == 'Открыть файл':
+                self.open_file_button = button
 
         return buttons
 

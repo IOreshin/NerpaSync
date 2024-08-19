@@ -8,13 +8,11 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-
 import sqlite3
 import shutil
 from getpass import getuser
-import tkinter as tk
 
-from .KompasUtility import KompasThreadFuncs, ReopenDoc
+from .KompasUtility import SetStatusDoc
 
 from tkinter import filedialog
 
@@ -25,6 +23,11 @@ class CADFolderDB():
         self.username = getuser()
 
     def init_user_track(self):
+        '''
+        Метод создает таблицу в главной БД,
+        в которую записывается имя пользователя,
+        который последний внес изменения в БД
+        '''
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''CREATE TABLE IF NOT EXISTS
@@ -36,6 +39,10 @@ class CADFolderDB():
             conn.commit()
 
     def update_last_user(self):
+        '''
+        Метод по обновлению последнего пользователя,
+        вносившего изменения в БД
+        '''
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -46,12 +53,23 @@ class CADFolderDB():
             conn.commit()
 
     def get_last_user(self):
+        '''
+        Метод получения имени последнего пользователя,
+        вносившего изменения в БД
+        '''
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute('''SELECT last_user FROM user_tracking''')
             return cursor.fetchone()[0]
 
     def update_project(self):
+        '''
+        Метод по ручному принудительному обновлению или созданию
+        проекта. Вызывает файловый диалог с выбором директории.
+        После этого создается таблица(если надо) и заносятся или
+        обновляются записи в таблице
+        '''
+
         project_path = filedialog.askdirectory()
         if not project_path:
             print('Путь к проекту не выбран')
@@ -60,7 +78,6 @@ class CADFolderDB():
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             print('Подключение к главной БД')
-
             cursor.execute('''
             CREATE TABLE IF NOT EXISTS file_structure (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,64 +92,83 @@ class CADFolderDB():
             cursor.execute('SELECT network_path, last_modified FROM file_structure')
             exists_paths = {row[0]: row[1] for row in cursor.fetchall()}
 
+            #последовательной обход директорий и файлов в главной папке проекта
             for dirpath, dirnames, filenames in os.walk(project_path):
                 for dirname in dirnames:
                     full_path = os.path.join(dirpath, dirname).replace("\\", "/")
                     last_modified = datetime.fromtimestamp(os.path.getmtime(full_path)).isoformat()
+                    #если пути папки нет в БД
                     if full_path not in exists_paths:
                         cursor.execute('''
                             INSERT INTO file_structure 
                             (name, network_path, status, type, last_modified)
                             VALUES (?, ?, ?, ?, ?)
                         ''', (dirname, full_path, 'Зарегистрирован', 'directory', last_modified))
+                    #если запись есть, но она старая
                     elif exists_paths[full_path] != last_modified:
                         cursor.execute('''
                             UPDATE file_structure 
                             SET last_modified = ?
                             WHERE network_path = ?
                         ''', (last_modified, full_path))
+                    #Случай, в котором папка существует и она корректно обновлена
                     exists_paths.pop(full_path, None)
                     self.set_read_only(full_path)
 
                 for filename in filenames:
+                    #исключения из перебора TEMP файлов(начинаются с ~) и BACKUP файлов КОМПАС
                     if not filename.startswith('~') and filename[-3:] not in ['bak']:
                         full_path = os.path.join(dirpath, filename).replace("\\", "/")
                         last_modified = datetime.fromtimestamp(os.path.getmtime(full_path)).isoformat()
+                        #если пути нет в БД
                         if full_path not in exists_paths:
                             cursor.execute('''
                                 INSERT INTO file_structure 
                                 (name, network_path, status, type, last_modified)
                                 VALUES (?, ?, ?, ?, ?)
                             ''', (filename, full_path, 'Зарегистрирован', 'file', last_modified))
+                        #если путь есть, но дата изменения не актуальна
                         elif exists_paths[full_path] != last_modified:
                             cursor.execute('''
                                 UPDATE file_structure 
                                 SET last_modified = ?
                                 WHERE network_path = ?
                             ''', (last_modified, full_path))
+                        #Случай, в котором папка существует и она корректно обновлена
                         exists_paths.pop(full_path, None)
                         self.set_read_only(full_path)
-
             # Удаление несуществующих путей
             if exists_paths:
                 cursor.executemany("DELETE FROM file_structure WHERE network_path = ?", 
                                    [(path,) for path in exists_paths])
-
             conn.commit()
             print('База данных обновлена')
+        #создание и обновление таблицы с информацией о последнем пользователе
+        self.init_user_track()
+        self.update_last_user()
 
     def set_read_only(self, file_path):
+        '''
+        Метод для установки режима "Только для чтения"
+        '''
         try:
             os.chmod(file_path, stat.S_IREAD)
         except Exception as e:
             print("Ошибка при установке атрибута 'только для чтения' для {}: {}".format(file_path,e))
 
     def sync_to_local(self):
+        '''
+        Метод для синхронизации данных с сетевого диска на локальный.
+        Работает как на полный перенос, так и на обновление в соответсвии с данными в главной БД
+        '''
+        #инициализация пользовательских параметров
         user_name = getuser()
         user_db = project_root + '\\databases\\CADFolder_{}.db'.format(user_name)
         local_root = os.path.join(os.getenv('USERPROFILE'), 'AppData', 'NerpaSyncVault', 'YKProject')
+
         try:
             with sqlite3.connect(user_db) as user_conn, sqlite3.connect(self.db_path) as conn:
+                # user_cursor - управление БД пользователя, cursor - управление главной БД
                 user_cursor = user_conn.cursor()
                 cursor = conn.cursor()
                 user_cursor.execute('''
@@ -152,9 +188,12 @@ class CADFolderDB():
                 synced_local_paths = set()
 
                 for network_path, last_modified in network_directories:
+                    #создание локальных параметров названий файлов
+                    # TODO надо сделать более независиый от CAD метод
                     local_directory_path = os.path.join(local_root, network_path.split('CAD', 1)[-1].replace('/', '\\'))
                     local_directory_name = os.path.basename(local_directory_path)
 
+                    #проверка существования записи в пользовательской БД о файле
                     user_cursor.execute('''
                         SELECT last_modified FROM file_structure WHERE name = ? AND local_path = ? AND type = 'directory'
                     ''', (local_directory_name, local_directory_path))
@@ -183,6 +222,8 @@ class CADFolderDB():
                 network_files = cursor.fetchall()
 
                 for network_path, last_modified in network_files:
+                    #создание локальных параметров названий файлов
+                    # TODO надо сделать более независиый от CAD метод
                     local_file_path = os.path.join(local_root, 
                                                    network_path.split('CAD', 1)[-1].replace('/', '\\'))
                     local_file_name = os.path.basename(local_file_path)
@@ -206,6 +247,7 @@ class CADFolderDB():
                         print('Копирование файла {} в {}'.format(local_file_name, local_file_path))
                         self.set_read_only(local_file_path)
                     elif exists[0] != last_modified:
+                        #в случае, когда надо обновить файл сначала требуется снять режим "Только для чтения"
                         os.chmod(local_file_path, 0o666)
                         shutil.copy2(network_path, local_file_path)
                         user_cursor.execute('''
@@ -244,72 +286,71 @@ class CADFolderDB():
             print("Ошибка синхронизации с локальным хранилищем: {}".format(e))
 
     def update_file_status(self, file_name, action):
+        '''
+        Метод по установки статусов "Зарегистрировано" и "Разрегистрировано"
+        '''
         # Подключение к главной базе данных
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        print('Подключение к главной БД')
+        try:
+            user_name = getuser()
+            user_db = project_root + '\\databases\\CADFolder_{}.db'.format(user_name)
+            with sqlite3.connect(user_db) as user_conn, sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                user_cursor = user_conn.cursor()
+                print('Подключение к главной и локальной БД')
+                # Поиск файла по имени
+                cursor.execute("SELECT network_path FROM file_structure WHERE name = ?", (file_name,))
+                result = cursor.fetchone()
+                if result:
+                    network_file_path = result[0]
+                    if action == "unregister":
+                        # Обновление статуса в главной базе данных
+                        cursor.execute("UPDATE file_structure SET status = ? WHERE name = ?", (getuser(), file_name))
+                        #получение пути к файлу на локальном диске
+                        user_cursor.execute("SELECT local_path FROM file_structure WHERE name = ?", (file_name,))
+                        local_file_path = user_cursor.fetchone()[0]
+                        local_file_path = os.path.normpath(local_file_path)
+                        # Снятие атрибута "только для чтения" на локальном диске
+                        os.chmod(local_file_path, 0o666)
+                        SetStatusDoc(read_only=False, file_path=local_file_path)
+                        print("Файл {} разрегистрирован".format(file_name))
+
+                    elif action == "register":
+                        # Создание локального пути к файлу
+                        user_cursor.execute("SELECT local_path FROM file_structure WHERE name = ?", (file_name,))
+                        local_file_path = user_cursor.fetchone()[0]
+                        # Нормализация пути для текущей ОС
+                        local_file_path = os.path.normpath(local_file_path)
+
+                        # Отладочная информация
+                        print("Попытка доступа к локальному файлу по пути: {}".format(local_file_path))
+
+                        if not os.path.exists(local_file_path):
+                            print("Ошибка: Локальный файл {} не найден".format(local_file_path))
+                            return
+
+                        # Снятие атрибута с локального файла "только для чтения"
+                        os.chmod(network_file_path, 0o666)
+
+                        # Копирование файла с локального хранилища на сетевой диск с заменой
+                        shutil.copy2(local_file_path, network_file_path)
+
+                        # Установка атрибута "только для чтения" для сетевого и локального файлов
+                        self.set_read_only(network_file_path)
+                        self.set_read_only(local_file_path)
+
+                        SetStatusDoc(read_only=True, file_path = local_file_path)
+
+                        # Обновление статуса в базе данных
+                        last_modified = datetime.fromtimestamp(os.path.getmtime(network_file_path)).isoformat()
+                        cursor.execute("UPDATE file_structure SET status = 'Зарегистрирован' WHERE name = ?", (file_name,))
+                        cursor.execute("UPDATE file_structure SET last_modified = ? WHERE name = ?", (last_modified, file_name,))
+                        print("Файл {} зарегистрирован и скопирован на сетевой диск".format(file_name))
         
-        # Поиск файла по имени
-        cursor.execute("SELECT network_path FROM file_structure WHERE name = ?", (file_name,))
-        result = cursor.fetchone()
-        # Подключение к локальной базе данных
-        user_name = getuser()
-        user_db = project_root + '\\databases\\CADFolder_{}.db'.format(user_name)
-        user_conn = sqlite3.connect(user_db)
-        user_cursor = user_conn.cursor()
-        print('Подключение к локальной базе данных')
+                conn.commit()
 
-        if result:
-            network_file_path = result[0]
-            if action == "unregister":
-                # Обновление статуса в базе данных
-                cursor.execute("UPDATE file_structure SET status = ? WHERE name = ?", (getuser(), file_name))
-                #получение пути к файлу на локальном диске
-                user_cursor.execute("SELECT local_path FROM file_structure WHERE name = ?", (file_name,))
-                local_file_path = user_cursor.fetchone()[0]
-                local_file_path = os.path.normpath(local_file_path)
-                # Снятие атрибута "только для чтения" на локальном диске
-                os.chmod(local_file_path, 0o666)
-
-                ReopenDoc(read_only=False)
-
-                print("Файл {} разрегистрирован".format(file_name))
-
-            elif action == "register":
-                # Создание локального пути к файлу
-                user_cursor.execute("SELECT local_path FROM file_structure WHERE name = ?", (file_name,))
-                local_file_path = user_cursor.fetchone()[0]
-                # Нормализация пути для текущей ОС
-                local_file_path = os.path.normpath(local_file_path)
-
-                # Отладочная информация
-                print("Попытка доступа к локальному файлу по пути: {}".format(local_file_path))
-
-                if not os.path.exists(local_file_path):
-                    print("Ошибка: Локальный файл {} не найден".format(local_file_path))
-                    return
-
-                # Снятие атрибута "только для чтения"
-                os.chmod(network_file_path, 0o666)
-
-                # Копирование файла с локального хранилища на сетевой диск с заменой
-                shutil.copy2(local_file_path, network_file_path)
-
-                # Установка атрибута "только для чтения"
-                self.set_read_only(network_file_path)
-                self.set_read_only(local_file_path)
-
-                ReopenDoc(read_only=True)
-
-                # Обновление статуса в базе данных
-                last_modified = datetime.fromtimestamp(os.path.getmtime(network_file_path)).isoformat()
-                cursor.execute("UPDATE file_structure SET status = 'Зарегистрирован' WHERE name = ?", (file_name,))
-                cursor.execute("UPDATE file_structure SET last_modified = ? WHERE name = ?", (last_modified, file_name,))
-                print("Файл {} зарегистрирован и скопирован на сетевой диск".format(file_name))
-  
-        conn.commit()
-        conn.close()
-
+        except (sqlite3.Error, OSError) as e:
+            print("Ошибка синхронизации с локальным хранилищем: {}".format(e))
+            
 
 
            
