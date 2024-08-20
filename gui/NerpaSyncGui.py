@@ -14,7 +14,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from gui import gui_window
+from .WindowModule import Window, k3DMakerWindow
 from src.DBMngModule import CADFolderDB
 from src.KompasEventsHandler import KompasFrameHandler
 from src.KompasUtility import OpenDoc
@@ -40,7 +40,7 @@ class InitProject:
     def create_project(self):
         CADFolderDB().update_project()
 
-class NerpaSyncMain(gui_window.Window):
+class NerpaSyncMain(Window):
     def __init__(self) -> None:
         super().__init__()
         self.db_path = project_root+'\\databases\\CADFolder.db'
@@ -58,6 +58,7 @@ class NerpaSyncMain(gui_window.Window):
         self.kompas_handler_running = True  # Флаг для управления потоком
 
         self.user_name = getuser()  # Получаем имя текущего пользователя
+        self.user_db_path = project_root+'\\databases\\CADFolder_{}.db'.format(self.user_name)
         
         #инициализация UI
         self.init_frames()
@@ -94,20 +95,19 @@ class NerpaSyncMain(gui_window.Window):
             current_modified_time = os.path.getmtime(self.db_path)
             last_user = self.cad_db.get_last_user()
             if current_modified_time != self.last_modified_time and last_user != getuser():
-                print("База данных была изменена.")
+                print("База данных была изменена {}. Выполняется синхронизация".format(last_user))
                 self.last_modified_time = current_modified_time
                 self.on_database_change()
 
         except Exception as e:
             print("Ошибка при проверке изменений в БД: {}".format(e))
 
-        # Повторяем проверку через 1 секунду (1000 мс)
+        # Повторяем проверку через 1 секунду
         self.main_root.after(1000, self.check_db_changes)
 
     def on_database_change(self):
         # Здесь вызывается функция, которую нужно выполнить при изменении БД
         self.cad_db.sync_to_local()
-        # Например, вы можете обновить TreeView:
         self.update_treeview()
 
     def check_event_queue(self):
@@ -338,11 +338,13 @@ class NerpaSyncMain(gui_window.Window):
 
     def update_buttons_state(self):
         selected_item = self.tree.selection()
-
         # Деактивируем кнопки по умолчанию
         self.register_button.state(['disabled'])
         self.unregister_button.state(['disabled'])
         self.open_file_button.state(['disabled'])
+        self.create_assy_button.state(['disabled'])
+        self.create_detail_button.state(['disabled'])
+        self.create_draw_button.state(['disabled'])
 
         if selected_item:
             item_values = self.tree.item(selected_item, "values")
@@ -351,16 +353,20 @@ class NerpaSyncMain(gui_window.Window):
             if status == "Зарегистрирован":
                 self.open_file_button.state(['!disabled'])
                 self.unregister_button.state(['!disabled'])
+                self.create_draw_button.state(['!disabled'])
             elif status != "Зарегистрирован" and status == self.user_name:
                 self.open_file_button.state(['!disabled'])
                 self.register_button.state(['!disabled'])
+                self.create_draw_button.state(['!disabled'])
+            elif status == "":
+                self.create_assy_button.state(['!disabled'])
+                self.create_detail_button.state(['!disabled'])
 
     def do_nothing(self):
         pass
 
     def open_doc(self):
         selected_item = self.tree.selection()
-
         if selected_item:
             try:
                 item_name = self.tree.item(selected_item)['text']
@@ -379,6 +385,29 @@ class NerpaSyncMain(gui_window.Window):
             except Exception as e:
                 print('Ошибка в получении пути к локальному файлу: {}'.format(e))
 
+    def create_assy(self):
+        selected_item = self.tree.selection()
+        if selected_item:
+            dir_name = self.tree.item(selected_item)['text']
+            k3DMakerWindow(self.main_root, 5.0)
+    
+    def create_detail(self):
+        selected_item = self.tree.selection()
+        if selected_item:
+            dir_name = self.tree.item(selected_item)['text']
+            with sqlite3.connect(self.db_path) as conn, sqlite3.connect(self.user_db_path) as user_conn:
+                user_cursor = user_conn.cursor()
+                cursor = conn.cursor()
+                cursor.execute('''SELECT network_path FROM file_structure
+                               WHERE name = ? AND type = "directory"''',(dir_name,))
+                network_dir_path = cursor.fetchone()[0]
+
+                user_cursor.execute('''SELECT local_path FROM file_structure
+                               WHERE name = ? AND type = "directory"''',(dir_name,))
+                local_dir_path = user_cursor.fetchone()[0]
+                
+            if network_dir_path:
+                k3DMakerWindow(self.main_root, 4.0, network_dir_path, local_dir_path, self)
 
     def init_buttons(self):
         button_config = [
@@ -393,9 +422,9 @@ class NerpaSyncMain(gui_window.Window):
              {'text': 'Открыть файл', 'frame': 'manager',
              'command': self.open_doc, 'state': 'normal', 'row': 4, 'col': 0},
              {'text': 'Создать сборку', 'frame': 'file_maker',
-             'command': self.do_nothing, 'state': 'normal', 'row': 0, 'col': 0},
+             'command': self.create_assy, 'state': 'normal', 'row': 0, 'col': 0},
              {'text': 'Создать деталь', 'frame': 'file_maker',
-             'command': self.do_nothing, 'state': 'normal', 'row': 1, 'col': 0},
+             'command': self.create_detail, 'state': 'normal', 'row': 1, 'col': 0},
              {'text': 'Создать чертеж', 'frame': 'file_maker',
              'command': self.do_nothing, 'state': 'normal', 'row': 2, 'col': 0},
         ]
@@ -419,6 +448,12 @@ class NerpaSyncMain(gui_window.Window):
                 self.unregister_button = button
             elif config['text'] == 'Открыть файл':
                 self.open_file_button = button
+            elif config['text'] == 'Создать сборку':
+                self.create_assy_button = button
+            elif config['text'] == 'Создать деталь':
+                self.create_detail_button = button
+            elif config['text'] == 'Создать чертеж':
+                self.create_draw_button = button
 
         return buttons
 

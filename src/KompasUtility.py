@@ -1,11 +1,17 @@
 # -*- coding: utf-8 -*-
 
 import os, sys
-import json
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
+# Добавляем корневую директорию проекта в sys.path
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import pythoncom
 from win32com.client import Dispatch, gencache
 from tkinter.messagebox import showinfo
-import threading
+from getpass import getuser
 
  
 def get_path():
@@ -111,6 +117,12 @@ class KompasItem:
             return False
 
 class SetStatusDoc(KompasAPI):
+    '''
+    Класс для установки статуса документа, открытого в Компас
+    Входные параметры:
+    read_only - True - только для чтения, False - редактирование
+    file_path - полный путь на локальном диске
+    '''
     def __init__(self, read_only:bool, file_path:str):
         super().__init__()
         self.read_only = read_only
@@ -126,6 +138,12 @@ class SetStatusDoc(KompasAPI):
                 break
 
 class OpenDoc(KompasAPI):
+    '''
+    Класс для открытия документа Компас.
+    Входные параметры:
+    open_state - True - видимый режим, False - невидимый режим
+    file_path - полный путь к файлу
+    '''
     def __init__(self, open_state:bool,file_path:str):
         super().__init__()
         self.file_path = file_path
@@ -135,3 +153,42 @@ class OpenDoc(KompasAPI):
     def open_doc(self):
         iDocuments = self.app.Documents
         iDocuments.Open(self.file_path, True, self.open_state)
+
+class k3DMaker(KompasAPI):
+    '''
+    Класс для создания 3D документов Компас
+    Входные параметры:
+    dir_path - путь в директорию на сетевом диске
+    doc_type - тип документа. 4.0 - деталь, 5.0 - сборка
+    '''
+    def __init__(self, file_path:str, doc_type:float, marking:str, name:str):
+        super().__init__()
+        self.file_path = file_path
+        self.doc_type = doc_type
+        self.marking = marking
+        self.name = name
+
+        self.make_document()
+
+
+    def make_document(self):
+        #создание документа в зависимости от типа
+        try:
+            iDocuments = self.app.Documents
+            iKompasDocument = iDocuments.Add(self.doc_type, False)
+            iKompasDocument3D = self.module.IKompasDocument3D(iKompasDocument)
+            iPart7 = iKompasDocument3D.TopPart
+
+            #добавление обозначения и наименования
+            doc_item = KompasItem(iPart7)
+            doc_item.set_prp_value(4.0, self.marking)
+            doc_item.set_prp_value(5.0, self.name)
+
+            iKompasDocument.SaveAs(self.file_path)
+            iKompasDocument.Close(0)
+
+        except Exception as e:
+            print(e)
+            return
+
+    

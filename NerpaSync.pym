@@ -2,7 +2,11 @@
 
 import os, sys, time
 
-from gui import NerpaSyncMain
+try:
+    from gui import NerpaSyncMain
+except Exception as e:
+    print(e)
+    time.sleep(10)
 
 
 if __name__ == '__main__':

@@ -1,2 +1,3 @@
 
-from .gui_main import NerpaSyncMain
+from .NerpaSyncGui import NerpaSyncMain
+from .WindowModule import Window, k3DMakerWindow
