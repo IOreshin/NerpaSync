@@ -99,25 +99,36 @@ class k3DMakerWindow:
                     extension = '.m3d'
                 else:
                     extension = '.a3d'
+                file_name = ''.join([marking, extension])
                 network_file_path = '/'.join([self.network_dir_path, 
-                                            marking])+extension
+                                            file_name])
+                local_file_path = '/'.join([self.local_dir_path, file_name])
                 
                 if k3DMaker(network_file_path,self.doc_type,marking,name):
-                    shutil.copy2(network_file_path, self.local_dir_path)
-                    last_modified = datetime.fromtimestamp(os.path.getmtime(network_file_path)).isoformat()
-                    name = ''.join([marking, extension])
-                    status = getuser()
+                    try:
+                        shutil.copy2(network_file_path, self.local_dir_path)
+                        last_modified = datetime.fromtimestamp(os.path.getmtime(network_file_path)).isoformat()
+                        name = ''.join([marking, extension])
+                        status = getuser()
+                        self.user_db_path = project_root+'\\databases\\CADFolder_{}.db'.format(status)
 
-                    with sqlite3.connect(self.db_path) as conn:
-                        cursor = conn.cursor()
-                        cursor.execute('''INSERT INTO file_structure
-                                    (name, network_path, status, type, last_modified)
-                                    VALUES (?,?,?,?,?)''',
-                                    (name, network_file_path, status, 'file', last_modified))
-                        conn.commit()
+                        with sqlite3.connect(self.db_path) as conn, sqlite3.connect(self.user_db_path) as user_conn:
+                            user_cursor = user_conn.cursor()
+                            cursor = conn.cursor()
+                            cursor.execute('''INSERT INTO file_structure
+                                        (name, network_path, status, type, last_modified)
+                                        VALUES (?,?,?,?,?)''',
+                                        (name, network_file_path, status, 'file', last_modified))
+                            user_cursor.execute('''INSERT INTO file_structure
+                                        (name, local_path, status, type, last_modified)
+                                        VALUES (?,?,?,?,?)''',
+                                        (name, local_file_path, status, 'file', last_modified))
+                            user_conn.commit()
+                            conn.commit()
+                            self.main_window_instance.update_treeview()
 
-                        CADFolderDB().sync_to_local()
-                        self.main_window_instance.update_treeview()
+                    except Exception as e:
+                        print('Ошибка копирования файла: {}'.format(e))
                         
             else:
                 print('Одно из полей пустое. Введите значения в оба поля')
