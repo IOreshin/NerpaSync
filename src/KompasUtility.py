@@ -12,7 +12,8 @@ import pythoncom
 from win32com.client import Dispatch, gencache
 from tkinter.messagebox import showinfo
 from getpass import getuser
-
+import shutil, sqlite3
+from datetime import datetime
  
 def get_path():
     '''
@@ -170,7 +171,6 @@ class k3DMaker(KompasAPI):
 
         self.make_document()
 
-
     def make_document(self):
         #создание документа в зависимости от типа
         try:
@@ -191,4 +191,56 @@ class k3DMaker(KompasAPI):
             print(e)
             return
 
-    
+class k2DMaker(KompasAPI):
+    def __init__(self, local_file_path, network_file_path, main_window_instance):
+        super().__init__()
+        self.local_file_path = local_file_path
+        self.network_file_path = network_file_path
+        self.main_window = main_window_instance
+
+        #определение локального и сетевого путей
+        local_path_parts = self.local_file_path.split('\\')
+        self.source_name = local_path_parts[-1]
+        self.local_dir_path = '\\'.join(local_path_parts[:-1])
+
+        network_path_parts = self.network_file_path.split('/')
+        self.network_dir_path = '/'.join(network_path_parts[:-1])
+
+        self.network_cdw_path = self.network_file_path[:-4]+'.cdw'
+
+        self.db_path = project_root+'\\databases\\CADFolder.db'
+
+        self.create_doc()
+
+    def create_doc(self):
+        iDocuments = self.app.Documents
+        iKompasDocument = iDocuments.Add(1, True)
+        #сохранение чертежа на локальном диске
+        drawing_path = self.local_file_path[:-4]+'.cdw'
+        iKompasDocument.SaveAs(drawing_path)
+        
+        try:
+            shutil.copy2(drawing_path, self.network_dir_path)
+            last_modified = datetime.fromtimestamp(os.path.getmtime(drawing_path)).isoformat()
+            name = self.source_name[:-4]+'.cdw'
+            status = getuser()
+            self.user_db_path = project_root+'\\databases\\CADFolder_{}.db'.format(status)
+
+            with sqlite3.connect(self.db_path) as conn, sqlite3.connect(self.user_db_path) as user_conn:
+                user_cursor = user_conn.cursor()
+                cursor = conn.cursor()
+                cursor.execute('''INSERT INTO file_structure
+                                (name, network_path, status, type, last_modified)
+                                VALUES (?,?,?,?,?)''',
+                                (name, self.network_cdw_path, status, 'file', last_modified))
+                user_cursor.execute('''INSERT INTO file_structure
+                            (name, local_path, status, type, last_modified)
+                            VALUES (?,?,?,?,?)''',
+                            (name, drawing_path, status, 'file', last_modified))
+                user_conn.commit()
+                conn.commit()
+                self.main_window.update_treeview()
+        
+        except Exception as e:
+                        print('Ошибка копирования файла: {}'.format(e))
+

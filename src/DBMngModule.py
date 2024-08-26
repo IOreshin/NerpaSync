@@ -247,16 +247,20 @@ class CADFolderDB():
                         print('Копирование файла {} в {}'.format(local_file_name, local_file_path))
                         self.set_read_only(local_file_path)
                     elif exists[0] != last_modified:
-                        #в случае, когда надо обновить файл сначала требуется снять режим "Только для чтения"
-                        os.chmod(local_file_path, 0o666)
-                        shutil.copy2(network_path, local_file_path)
-                        user_cursor.execute('''
-                            UPDATE file_structure
-                            SET last_modified = ?, status = 'Обновлено'
-                            WHERE local_path = ? AND type = 'file'
-                        ''', (last_modified, local_file_path))
-                        print('Обновлен файл {} в {}'.format(local_file_name, local_file_path))
-                        self.set_read_only(local_file_path)
+                        try:
+                            #в случае, когда надо обновить файл сначала требуется снять режим "Только для чтения"
+                            os.chmod(local_file_path, 0o666)
+                            shutil.copy2(network_path, local_file_path)
+                            user_cursor.execute('''
+                                UPDATE file_structure
+                                SET last_modified = ?, status = 'Обновлено'
+                                WHERE local_path = ? AND type = 'file'
+                            ''', (last_modified, local_file_path))
+                            print('Обновлен файл {} в {}'.format(local_file_name, local_file_path))
+                            self.set_read_only(local_file_path)
+                        except Exception as e:
+                            print('Неудачная попытка обновить файл по пути {}. Возможно, этот документ открыт в Компас. Код ошибки: {}'.format(local_file_path, e))
+
 
                 # Удаление файлов и папок, которых нет на сетевом диске
                 user_cursor.execute("SELECT local_path FROM file_structure")
@@ -350,8 +354,6 @@ class CADFolderDB():
 
         except (sqlite3.Error, OSError) as e:
             print("Ошибка синхронизации с локальным хранилищем: {}".format(e))
-            
-
 
            
 

@@ -5,7 +5,6 @@ import sys
 import sqlite3
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
-import shutil
 import queue
 from datetime import datetime
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -14,10 +13,10 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from .WindowModule import Window, k3DMakerWindow
+from .WindowModule import Window, k3DMakerWindow, FolderMakerWindow
 from src.DBMngModule import CADFolderDB
 from src.KompasEventsHandler import KompasFrameHandler
-from src.KompasUtility import OpenDoc
+from src.KompasUtility import OpenDoc, k2DMaker
 from getpass import getuser
 
 class RedirectText:
@@ -123,7 +122,6 @@ class NerpaSyncMain(Window):
 
         self.main_root.after(100, self.check_event_queue)
 
-
     def handle_document_status(self, doc_name):
         # Проверка наличия документа в TreeView
         for item in self.tree.get_children():
@@ -136,14 +134,12 @@ class NerpaSyncMain(Window):
                         "Разрегистрация документа",
                         "Документ '{}' зарегистрирован. Хотите разрегистрировать его?".format(doc_name)
                     )
-                    self.cad_db.update_last_user()
                     if response:
                         self.cad_db.update_file_status(doc_name, "unregister")
                         self.update_treeview()
                         self.cad_db.update_last_user()
 
                 break
-
             
     def _find_node_by_text(self, item, text):
         """
@@ -175,7 +171,6 @@ class NerpaSyncMain(Window):
         # Создание текстового виджета для логирования
         self.log_text = scrolledtext.ScrolledText(self.frames['logs'], wrap=tk.WORD, height=8)
         self.log_text.grid(row=0, column=0, sticky='nsew')
-
 
     def redirect_stdout(self):
         # Перенаправляем вывод print в текстовый виджет
@@ -349,13 +344,15 @@ class NerpaSyncMain(Window):
         self.create_detail_button.state(['disabled'])
         self.create_draw_button.state(['disabled'])
         self.delete_file_button.state(['disabled'])
+        self.create_folder_button.state(['disabled'])
 
         if selected_item:
             item_values = self.tree.item(selected_item, "values")
             status = item_values[0] if item_values else ""
             # Активируем кнопки в зависимости от условий
-            if status == "Зарегистрирован":
+            if status:
                 self.open_file_button.state(['!disabled'])
+            if status == "Зарегистрирован":
                 self.unregister_button.state(['!disabled'])
                 self.create_draw_button.state(['!disabled'])
             elif status != "Зарегистрирован" and status == self.user_name:
@@ -366,6 +363,7 @@ class NerpaSyncMain(Window):
             elif status == "":
                 self.create_assy_button.state(['!disabled'])
                 self.create_detail_button.state(['!disabled'])
+                self.create_folder_button.state(['!disabled'])
 
     def do_nothing(self):
         pass
@@ -426,6 +424,33 @@ class NerpaSyncMain(Window):
             if network_dir_path:
                 k3DMakerWindow(self.main_root, 4.0, network_dir_path, local_dir_path, self)
 
+    def create_drawing(self):
+        selected_item = self.tree.selection()
+        if selected_item:
+            source_file_name = self.tree.item(selected_item)['text']
+            with sqlite3.connect(self.db_path) as conn, sqlite3.connect(self.user_db_path) as user_conn:
+                user_cursor = user_conn.cursor()
+                cursor = conn.cursor()
+                cursor.execute('''SELECT network_path FROM file_structure
+                               WHERE name = ? AND type = "file"''',(source_file_name,))
+                network_source_path = cursor.fetchone()[0]
+
+                user_cursor.execute('''SELECT local_path FROM file_structure
+                               WHERE name = ? AND type = "file"''',(source_file_name,))
+                local_source_path = user_cursor.fetchone()[0]
+            
+            if network_source_path:
+                k2DMaker(local_source_path, network_source_path, self)
+
+    def create_folder(self):
+        selected_item = self.tree.selection()
+        if selected_item:
+            dir_name = self.tree.item(selected_item)['text']
+            FolderMakerWindow(self.main_root, dir_name)
+            self.update_treeview()
+            
+
+
     def delete_doc(self):
         selected_item = self.tree.selection()
         if selected_item:
@@ -436,11 +461,10 @@ class NerpaSyncMain(Window):
                 cursor.execute('''SELECT network_path FROM file_structure 
                                                    WHERE name = ? AND type="file"''',(object_name,))
                 network_file_path = cursor.fetchone()[0]
-                print(network_file_path)
-
                 user_cursor.execute('''SELECT local_path FROM file_structure 
                                                    WHERE name = ? AND type="file"''',(object_name,))
                 local_file_path = user_cursor.fetchone()[0]
+                db_flag = False
 
                 try:
                     #снятие "Только для чтения"
@@ -448,24 +472,29 @@ class NerpaSyncMain(Window):
                     os.remove(local_file_path)
                     os.chmod(network_file_path, 0o666)
                     os.remove(network_file_path)
+                    db_flag = True
                 except Exception as e:
                     print('Ошибка с удалением файла: {}'.format(e))
                     return
                 
                 try:
-                    cursor.execute('''DELETE FROM file_structure WHERE name = ?''',(object_name,))
-                    user_cursor.execute('''DELETE FROM file_structure WHERE name = ?''',(object_name,))
-                    user_conn.commit()
-                    conn.commit()
-                    self.update_treeview()
+                    if db_flag:
+                        cursor.execute('''DELETE FROM file_structure WHERE name = ?''',(object_name,))
+                        user_cursor.execute('''DELETE FROM file_structure WHERE name = ?''',(object_name,))
+                        user_conn.commit()
+                        conn.commit()
+                        self.update_treeview()
+                        print('Документ {} удален'.format(object_name))
                 except Exception as e:
                     print('Ошибка с доступом к БД: {}'.format(e))
                     return
-
+            
     def init_buttons(self):
         button_config = [
             {'text': 'Обновить или создать проект', 'frame': 'admin',
              'command': self.update_cad_folder, 'state': 'normal', 'row': 0, 'col': 0},
+            {'text': 'Создать папку', 'frame': 'admin',
+             'command': self.create_folder, 'state': 'normal', 'row': 1, 'col': 0},
             {'text': 'Синхронизовать с сетевого диска', 'frame': 'manager',
              'command': self.sync_network_to_local, 'state': 'normal', 'row': 1, 'col': 0},
              {'text': 'Разрегистрировать файл', 'frame': 'manager',
@@ -481,7 +510,7 @@ class NerpaSyncMain(Window):
              {'text': 'Создать деталь', 'frame': 'file_maker',
              'command': self.create_detail, 'state': 'normal', 'row': 1, 'col': 0},
              {'text': 'Создать чертеж', 'frame': 'file_maker',
-             'command': self.do_nothing, 'state': 'normal', 'row': 2, 'col': 0},
+             'command': self.create_drawing, 'state': 'normal', 'row': 2, 'col': 0},
         ]
 
         buttons = []
@@ -511,6 +540,8 @@ class NerpaSyncMain(Window):
                 self.create_draw_button = button
             elif config['text'] == 'Удалить файл':
                 self.delete_file_button = button
+            elif config['text'] == 'Создать папку':
+                self.create_folder_button = button
 
         return buttons
 
