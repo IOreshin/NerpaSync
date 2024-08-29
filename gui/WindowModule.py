@@ -2,7 +2,7 @@
 
 import tkinter as tk
 from tkinter import ttk
-import sys, os
+import sys, os, stat
 import sqlite3
 import shutil
 from datetime import datetime
@@ -213,4 +213,108 @@ class FolderMakerWindow:
                     
         except Exception as e:
             print(e)
+
+class CreateCopyWindow:
+    def __init__(self,root, source_local_file_path, source_network_file_path, window_instance):
+        self.root = root
+        self.source_local_file_path = source_local_file_path
+        self.source_network_file_path = source_network_file_path
+        self.window_instance = window_instance
+
+        self.doc_name, self.extension, self.local_dir_path, self.network_dir_path = self.get_doc_name()
+
+        self.db_path = project_root+'\\databases\\CADFolder.db'
+        self.username = getuser()
+        self.user_db_path = project_root+'\\databases\\CADFolder_{}.db'.format(self.username)
+
+        self.get_create_copy_window()
+
+    def get_doc_name(self):
+        local_path_parts = self.source_local_file_path.split('\\')
+        doc_name = local_path_parts[-1][:-4]
+        extension = local_path_parts[-1][-4:]
+        local_dir_path = '\\'.join(local_path_parts[:-1])
+
+        network_path_parts = self.source_network_file_path.split('/')
+        network_dir_path = '/'.join(network_path_parts[:-1])
+        return doc_name, extension, local_dir_path, network_dir_path
+
+    def get_create_copy_window(self):
+        ask_window = tk.Toplevel(self.root)
+
+        common_label = ttk.Label(ask_window, text='Измените название копии. Расширение файла не указывать')
+        common_label.grid(row=0, column=0, padx=10, pady=10, columnspan=2)
+
+        name_label = ttk.Label(ask_window, text = 'Название:')
+        name_label.grid(row=1, column=0,
+                           padx=10, pady=10)
+          
+        self.name_entry = ttk.Entry(ask_window)
+        self.name_entry.grid(row=1, column=1,
+                           padx=10, pady=10)
+        self.name_entry.insert(0, self.doc_name)
+        
+        submit_button = ttk.Button(ask_window,
+                                   text='Создать',
+                                   command=self.create_copy)
+        submit_button.grid(row=2,column=1,
+                           padx=10, pady=10)
+        
+    def create_copy(self):
+        copy_file_name = self.name_entry.get()
+        if copy_file_name == self.doc_name:
+            print('Название файла совпадает с именем оригинала. Измените название файла')
+            return
+        
+        copy_local_path = '\\'.join([self.local_dir_path, copy_file_name])+self.extension
+        copy_network_path = '/'.join([self.network_dir_path, copy_file_name])+self.extension
+        copy_file_name = copy_file_name+self.extension
+        copy_flag = False
+        try:
+            shutil.copy2(self.source_local_file_path, copy_local_path)
+            shutil.copy2(self.source_local_file_path, copy_network_path)
+            os.chmod(copy_local_path, 0o666)
+            os.chmod(copy_network_path, stat.S_IREAD)
+            copy_flag = True
+        except Exception as e:
+            print('Ошибка копирования файлов: {}'.format(e))
+
+        if copy_flag:
+            db_flag = False
+            with sqlite3.connect(self.db_path) as conn, sqlite3.connect(self.user_db_path) as user_conn:
+                user_cursor = user_conn.cursor()
+                cursor = conn.cursor()
+                try:
+                    last_modified = datetime.fromtimestamp(os.path.getmtime(copy_local_path)).isoformat()
+                    cursor.execute('''INSERT INTO file_structure
+                                   (name, network_path, status, type, last_modified)
+                                   VALUES (?,?,?,?,?)''',
+                                   (copy_file_name, copy_network_path,self.username, 'file', last_modified))
+                    user_cursor.execute('''INSERT INTO file_structure
+                                   (name, local_path, status, type, last_modified)
+                                   VALUES (?,?,?,?,?)''',
+                                   (copy_file_name, copy_local_path,self.username, 'file', last_modified))
+                    conn.commit()
+                    user_conn.commit()
+                    print('Копия {} успешно создана'.format(copy_file_name))
+                    db_flag = True
+                    self.window_instance.update_treeview()
+
+                except Exception as e:
+                    print(e)
+
+            if db_flag:
+                pass
+            else:
+                #TO DO: добавить удаление копий, потому что не занеслась запись в бд
+                pass
+
+
+
+
+
+
+
+
+
 

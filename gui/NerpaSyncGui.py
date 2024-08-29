@@ -13,7 +13,8 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from .WindowModule import Window, k3DMakerWindow, FolderMakerWindow
+from .WindowModule import (Window, k3DMakerWindow,
+                            FolderMakerWindow, CreateCopyWindow)
 from src.DBMngModule import CADFolderDB
 from src.KompasEventsHandler import KompasFrameHandler
 from src.KompasUtility import OpenDoc, k2DMaker
@@ -90,6 +91,7 @@ class NerpaSyncMain(Window):
         self.main_root.after(1000, self.check_db_changes)
         
         self.main_root.update_idletasks()
+        self.update_buttons_state()
         self.main_root.mainloop()
 
     def check_db_changes(self):
@@ -345,6 +347,7 @@ class NerpaSyncMain(Window):
         self.create_draw_button.state(['disabled'])
         self.delete_file_button.state(['disabled'])
         self.create_folder_button.state(['disabled'])
+        self.create_copy_button.state(['disabled'])
 
         if selected_item:
             item_values = self.tree.item(selected_item, "values")
@@ -355,11 +358,13 @@ class NerpaSyncMain(Window):
             if status == "Зарегистрирован":
                 self.unregister_button.state(['!disabled'])
                 self.create_draw_button.state(['!disabled'])
+                self.create_copy_button.state(['!disabled'])
             elif status != "Зарегистрирован" and status == self.user_name:
                 self.open_file_button.state(['!disabled'])
                 self.register_button.state(['!disabled'])
                 self.create_draw_button.state(['!disabled'])
                 self.delete_file_button.state(['!disabled'])
+                self.create_copy_button.state(['!disabled'])
             elif status == "":
                 self.create_assy_button.state(['!disabled'])
                 self.create_detail_button.state(['!disabled'])
@@ -448,7 +453,24 @@ class NerpaSyncMain(Window):
             dir_name = self.tree.item(selected_item)['text']
             FolderMakerWindow(self.main_root, dir_name)
             self.update_treeview()
-            
+
+    def create_copy(self):
+        selected_item = self.tree.selection()
+        if selected_item:
+            source_file_name = self.tree.item(selected_item)['text']
+            with sqlite3.connect(self.db_path) as conn, sqlite3.connect(self.user_db_path) as user_conn:
+                user_cursor = user_conn.cursor()
+                cursor = conn.cursor()
+                cursor.execute('''SELECT network_path FROM file_structure
+                               WHERE name = ? AND type = "file"''',(source_file_name,))
+                network_source_path = cursor.fetchone()[0]
+
+                user_cursor.execute('''SELECT local_path FROM file_structure
+                               WHERE name = ? AND type = "file"''',(source_file_name,))
+                local_source_path = user_cursor.fetchone()[0]
+
+            if local_source_path:
+                CreateCopyWindow(self.main_root,local_source_path, network_source_path, self)
 
 
     def delete_doc(self):
@@ -511,6 +533,8 @@ class NerpaSyncMain(Window):
              'command': self.create_detail, 'state': 'normal', 'row': 1, 'col': 0},
              {'text': 'Создать чертеж', 'frame': 'file_maker',
              'command': self.create_drawing, 'state': 'normal', 'row': 2, 'col': 0},
+             {'text': 'Создать копию', 'frame': 'file_maker',
+             'command': self.create_copy, 'state': 'normal', 'row': 3, 'col': 0},
         ]
 
         buttons = []
@@ -542,6 +566,8 @@ class NerpaSyncMain(Window):
                 self.delete_file_button = button
             elif config['text'] == 'Создать папку':
                 self.create_folder_button = button
+            elif config['text'] == 'Создать копию':
+                self.create_copy_button = button
 
         return buttons
 

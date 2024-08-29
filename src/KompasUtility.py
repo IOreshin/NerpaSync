@@ -242,5 +242,5 @@ class k2DMaker(KompasAPI):
                 self.main_window.update_treeview()
         
         except Exception as e:
-                        print('Ошибка копирования файла: {}'.format(e))
+            print('Ошибка копирования файла: {}'.format(e))
 
