@@ -63,6 +63,10 @@ class NerpaSyncMain(Window):
         self.user_name = getuser()  # Получаем имя текущего пользователя
         self.user_db_path = project_root+'\\databases\\CADFolder_{}.db'.format(self.user_name)
         
+        self.detail_ico = tk.PhotoImage(file=project_root+'\\pic\\detail_ico.gif')
+        self.assy_ico = tk.PhotoImage(file=project_root+'\\pic\\assy_ico.gif')
+        self.folder_ico = tk.PhotoImage(file=project_root+'\\pic\\folder_ico.gif')
+        self.draw_ico = tk.PhotoImage(file=project_root+'\\pic\\draw_ico.gif')
         #инициализация UI
         self.init_frames()
         self.init_buttons()
@@ -245,12 +249,30 @@ class NerpaSyncMain(Window):
                     if i == len(path_parts) - 1:
                         # Добавляем файл или папку, которая идет после "CAD"
                         if item_type == "directory":
-                            tree_id = self.tree.insert(parent_id, 'end', text=part)
+                            tree_id = self.tree.insert(parent_id, 'end', text=part, 
+                                                       image=self.folder_ico)
                         else:
-                            tree_id = self.tree.insert(parent_id, 'end', text=part, values=(status, last_modified))
+                            extension = part[-4:]
+                            if extension == '.m3d':
+                                tree_id = self.tree.insert(parent_id, 'end', text=part,
+                                                    values=(status, last_modified),
+                                                    image=self.detail_ico)
+                            elif extension == '.a3d':
+                                tree_id = self.tree.insert(parent_id, 'end', text=part,
+                                                    values=(status, last_modified),
+                                                    image=self.assy_ico)
+                            elif extension == '.cdw':
+                                tree_id = self.tree.insert(parent_id, 'end', text=part,
+                                                    values=(status, last_modified),
+                                                    image=self.draw_ico)
+                            else:
+                                tree_id = self.tree.insert(parent_id, 'end', text=part,
+                                                        values=(status, last_modified)
+                                                        )
                     else:
                         # Добавляем промежуточные директории
-                        tree_id = self.tree.insert(parent_id, 'end', text=part)
+                        tree_id = self.tree.insert(parent_id, 'end', text=part, 
+                                                   image=self.folder_ico)
                     tree_items[current_path] = tree_id
                 parent = current_path
 
