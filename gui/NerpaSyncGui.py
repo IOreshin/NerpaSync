@@ -215,42 +215,49 @@ class NerpaSyncMain(Window):
 
     def populate_treeview(self, data):
         """
-            Добавляет элементы в TreeView, если путь содержит папку 'CAD',
-            и добавляет только те элементы, которые следуют за этой папкой.
+        Добавляет элементы в TreeView, начиная с общей конечной папки для всех элементов.
         """
         tree_items = {}
 
+        # Общая папку для всех путей
+        common_path = None
+        all_paths = [item[1].split('/') for item in data]
+
+        for path_parts in all_paths:
+            if common_path is None:
+                common_path = path_parts  # Первая итерация, берем первую строку как основу
+            else:
+                # Сравниваем поэлементно с предыдущей общей частью
+                common_path = [p1 for p1, p2 in zip(common_path, path_parts) if p1 == p2]
+
+        if not common_path:
+            return  # Если нет общей папки, выход
+
+        # Преобразуем общую часть в строку пути
+        common_path_str = '/'.join(common_path)
+
+        # проход по элементам данных и добавлять их после общей папки
         for item in data:
             name, network_path, status, item_type, last_modified = item
             path_parts = network_path.split('/')
 
-            # Проверяем, есть ли в пути папка с "CAD" в названии
-            cad_folder_found = False
-            for index, part in enumerate(path_parts):
-                if 'CAD' in part:
-                    cad_folder_found = True
-                    cad_index = index
-                    break
-
-            if not cad_folder_found:
+            # Пропускаем элементы, не включающие общую папку
+            if not network_path.startswith(common_path_str):
                 continue
 
-            # Если папка с "CAD" является последней в пути, пропускаем этот элемент
-            if cad_index == len(path_parts) - 1:
-                continue
-
-            # Начинаем добавлять элементы после папки с "CAD"
+            # Начинаем добавлять элементы после общей папки
             parent = ''
-            for i, part in enumerate(path_parts[cad_index + 1:], start=cad_index + 1):
+            start_index = len(common_path)
+            for i, part in enumerate(path_parts[start_index:], start=start_index):
                 current_path = '/'.join(path_parts[:i + 1])
 
                 if current_path not in tree_items:
                     parent_id = tree_items.get(parent, '')
                     if i == len(path_parts) - 1:
-                        # Добавляем файл или папку, которая идет после "CAD"
+                        # Добавляем файл или папку, которая идет после общей папки
                         if item_type == "directory":
                             tree_id = self.tree.insert(parent_id, 'end', text=part, 
-                                                       image=self.folder_ico)
+                                                    image=self.folder_ico)
                         else:
                             extension = part[-4:]
                             if extension == '.m3d':
@@ -272,7 +279,7 @@ class NerpaSyncMain(Window):
                     else:
                         # Добавляем промежуточные директории
                         tree_id = self.tree.insert(parent_id, 'end', text=part, 
-                                                   image=self.folder_ico)
+                                                image=self.folder_ico)
                     tree_items[current_path] = tree_id
                 parent = current_path
 
@@ -374,19 +381,22 @@ class NerpaSyncMain(Window):
         if selected_item:
             item_values = self.tree.item(selected_item, "values")
             status = item_values[0] if item_values else ""
+
+            file_name = self.tree.item(selected_item)['text']
+            extension = file_name[-4:]
             # Активируем кнопки в зависимости от условий
             if status:
                 self.open_file_button.state(['!disabled'])
-            if status == "Зарегистрирован":
+                self.create_copy_button.state(['!disabled'])
+            if status == "Зарегистрирован" and extension in ['.a3d', '.m3d']:
                 self.unregister_button.state(['!disabled'])
                 self.create_draw_button.state(['!disabled'])
-                self.create_copy_button.state(['!disabled'])
+            elif status == 'Зарегистрирован' and extension in ['.cdw']:
+                self.unregister_button.state(['!disabled'])
             elif status != "Зарегистрирован" and status == self.user_name:
-                self.open_file_button.state(['!disabled'])
                 self.register_button.state(['!disabled'])
                 self.create_draw_button.state(['!disabled'])
                 self.delete_file_button.state(['!disabled'])
-                self.create_copy_button.state(['!disabled'])
             elif status == "":
                 self.create_assy_button.state(['!disabled'])
                 self.create_detail_button.state(['!disabled'])
