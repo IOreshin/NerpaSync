@@ -212,6 +212,14 @@ class k2DMaker(KompasAPI):
 
         self.create_doc()
 
+    def get_last_modified_time(self, file_path):
+        '''
+        Возвращает время последнего изменения файла в формате ISO без миллисекунд.
+        '''
+        timestamp = os.path.getmtime(file_path)
+        dt = datetime.fromtimestamp(timestamp)
+        return dt.strftime('%Y-%m-%dT%H:%M:%S')
+
     def create_doc(self):
         iDocuments = self.app.Documents
         iKompasDocument = iDocuments.Add(1, True)
@@ -221,7 +229,7 @@ class k2DMaker(KompasAPI):
         
         try:
             shutil.copy2(drawing_path, self.network_dir_path)
-            last_modified = datetime.fromtimestamp(os.path.getmtime(drawing_path)).isoformat()
+            last_modified = self.get_last_modified_time(drawing_path)
             name = self.source_name[:-4]+'.cdw'
             status = getuser()
             self.user_db_path = project_root+'\\databases\\CADFolder_{}.db'.format(status)
